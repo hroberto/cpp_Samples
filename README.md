@@ -33,7 +33,7 @@ ipcs --all
 # 
 
 
-## start job 1 in backgroud
+## start server
 ./sm_server
 
 ipcs --all
@@ -48,11 +48,9 @@ ipcs --all
 # key        semid      owner      perms      nsems     
 # 0x00054321 1          ********   666        1  
 
-./sm_client
 
-## Stop Job 1 ( sm_server )
-fg
-<CTRL+C>
+## start client in other terminal
+./sm_client
 
 
 ## clear all 
