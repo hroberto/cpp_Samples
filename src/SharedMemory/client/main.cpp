@@ -2,6 +2,7 @@
 #include <iostream>
 #include <string>
 #include <sys/shm.h>
+#include <sys/sem.h>
 #include <errno.h>
 #include <fmt/format.h>
 #include <thread>
@@ -13,6 +14,7 @@
 
 
 #define SHM_KEY 0x1234
+#define SEM_KEY 0x54321
 
 
 int main(int argc, char const* argv[]) 
@@ -40,34 +42,57 @@ int main(int argc, char const* argv[])
     }
 
 
-    Book_Type bookTop;
+    // Book_Type bookTop;
 
-    sharedMemory_id = shmget(SHM_KEY, sizeof(Book_Type), 0644|IPC_CREAT);
+    sharedMemory_id = shmget(SHM_KEY, sizeof(Book_Type), 0644);
         if (sharedMemory_id == -1) {
         perror("Shared memory");
         return EXIT_FAILURE;
     }
 
-    const auto sharedMemory_ptr = shmat(sharedMemory_id, NULL, 0);
+    Book_Type* const sharedMemory_ptr = (Book_Type*) shmat(sharedMemory_id, NULL, 0);
     if (sharedMemory_ptr == (void *) -1) {
         perror("Shared memory attach");
         return EXIT_FAILURE;
     }
 
 
-    std::memcpy(sharedMemory_ptr, &bookTop, sizeof( Book_Type ) );
+    // std::memcpy(sharedMemory_ptr, &bookTop, sizeof( Book_Type ) );
 
     unsigned int last_sequence{};
     while (true) {
-        std::memcpy(&bookTop, sharedMemory_ptr, sizeof( Book_Type ) );
+        // std::memcpy(&bookTop, sharedMemory_ptr, sizeof( Book_Type ) );
 
-        if( bookTop.sequence != last_sequence ) {
-            last_sequence = bookTop.sequence;
-                std::cout << fmt::format( "Symbol \"{}\" | Top Bid - value: {}, quantity: {} | Top Ask - value: {}, quantity: {}\n"
-                    , bookTop.symbol
-                    , bookTop.top_bid[0], bookTop.top_bid[1]
-                    , bookTop.top_ask[0], bookTop.top_ask[1]
-                    );
+        if( sharedMemory_ptr->sequence != last_sequence ) {
+            auto semaphore_id = semget(SEM_KEY, 1, 0666);
+            
+            struct sembuf semaphore_ops[2] { 
+                {
+                .sem_num = 0,       /* Operate on semaphore 0 */
+                .sem_op = 0,        /* Wait resource until value to equals zero */
+                .sem_flg = 0 }
+                , {
+                .sem_num = 0,       /* Operate on semaphore 0 */
+                .sem_op = 1,        /* Increment value by one  */
+                .sem_flg = SEM_UNDO }
+            };
+
+            if (semop(semaphore_id, semaphore_ops, 2) == -1) {
+                perror("Semaphore Operation: ");
+                return EXIT_FAILURE;
+            }
+
+            last_sequence = sharedMemory_ptr->sequence;
+
+            std::cout << fmt::format( "Symbol \"{}\" | Top Bid - value: {}, quantity: {} | Top Ask - value: {}, quantity: {}\n"
+                , sharedMemory_ptr->symbol
+                , sharedMemory_ptr->top_bid[0], sharedMemory_ptr->top_bid[1]
+                , sharedMemory_ptr->top_ask[0], sharedMemory_ptr->top_ask[1]
+                );
+
+            struct sembuf  semaphore_ops_release{ .sem_num = 0, .sem_op = -1, .sem_flg = 0 };
+            semop(semaphore_id, &semaphore_ops_release, 1);
+
         }
         std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
     }

@@ -4,6 +4,7 @@
 #include <string>
 #include <rapidjson/document.h>
 #include <sys/shm.h>
+#include <sys/sem.h>
 #include<errno.h>
 
 #include "Tools/JSonUtils.h"
@@ -15,6 +16,7 @@
 
 
 #define SHM_KEY 0x1234
+#define SEM_KEY 0x54321
 
 
 int main(int argc, char const* argv[]) 
@@ -38,7 +40,7 @@ int main(int argc, char const* argv[])
         }
 
 
-        Book_Type bookTop;
+        // Book_Type bookTop;
 
         const auto sharedMemory_id = shmget(SHM_KEY, sizeof(Book_Type), 0644|IPC_CREAT);
          if (sharedMemory_id == -1) {
@@ -46,29 +48,50 @@ int main(int argc, char const* argv[])
             return EXIT_FAILURE;
         }
 
-        const auto sharedMemory_ptr = shmat(sharedMemory_id, NULL, 0);
+        Book_Type* const sharedMemory_ptr = (Book_Type*) shmat(sharedMemory_id, NULL, 0);
         if (sharedMemory_ptr == (void *) -1) {
             perror("Shared memory attach");
             return EXIT_FAILURE;
         }
 
 
+        int semaphore_id{};
+
+        /** remove all semaphores */
+        while( ( semaphore_id = semget(SEM_KEY, 1, IPC_STAT) ) >= 0  ) {
+            semctl(semaphore_id, 1, IPC_RMID);
+        }
+
+        semaphore_id = semget(SEM_KEY, 1, IPC_CREAT | IPC_EXCL | 0666);
+        
+        struct sembuf semaphore_ops[2] { 
+            {
+            .sem_num = 0,       /* Operate on semaphore 0 */
+            .sem_op = 0,        /* Wait resource until value to equals zero */
+            .sem_flg = 0 }
+            , {
+            .sem_num = 0,       /* Operate on semaphore 0 */
+            .sem_op = 1,        /* Increment value by one  */
+            .sem_flg = SEM_UNDO }
+        };
+
+        struct sembuf  semaphore_ops_release{ .sem_num = 0, .sem_op = -1, .sem_flg = 0 };
+        
         BinanceExchange wsBinance( "BinanceExchange", [&](const std::string symbol_id, const BinanceExchange::ValueList_Type& map_bid, const  BinanceExchange::ValueList_Type& map_ask) {
-            // std::cout << fmt::format( "Symbol \"{}\" | Top Bid - value: {}, quantity: {} | Top Ask - value: {}, quantity: {}\n"
-            //             , symbol_id
-            //             , map_bid.begin()->first, map_bid.begin()->second
-            //             , map_ask.begin()->first, map_ask.begin()->second
-            //             );
+            if (semop(semaphore_id, semaphore_ops, 2) == -1) {
+                perror("Semaphore Operation: ");
+                return EXIT_FAILURE;
+            }
 
+            strcpy(sharedMemory_ptr->symbol, symbol_id.c_str());
+            sharedMemory_ptr->top_bid[0] = map_bid.begin()->first;
+            sharedMemory_ptr->top_bid[1] = map_bid.begin()->second; 
+            sharedMemory_ptr->top_ask[0] = map_ask.begin()->first;
+            sharedMemory_ptr->top_ask[1] = map_ask.begin()->second;
+            sharedMemory_ptr->sequence++;
 
-            strcpy(bookTop.symbol, symbol_id.c_str());
-            bookTop.top_bid[0] = map_bid.begin()->first;
-            bookTop.top_bid[1] = map_bid.begin()->second; 
-            bookTop.top_ask[0] = map_ask.begin()->first;
-            bookTop.top_ask[1] = map_ask.begin()->second;
-            bookTop.sequence++;
-
-            std::memcpy(sharedMemory_ptr, &bookTop, sizeof( Book_Type ) );
+            /* unlock semaphore */
+            semop(semaphore_id, &semaphore_ops_release, 1);
 
         } );
 
@@ -77,8 +100,16 @@ int main(int argc, char const* argv[])
         std::thread(
             &BinanceExchange::run, 
             &wsBinance
-        ).join();
+        ).detach();
 
+        std::cout << "Type any key to quit" << std::endl;
+        std::getchar();
+
+
+        if (semctl(semaphore_id, 0, IPC_RMID) == -1) {
+            perror("Remove Semaphore: Semaphore CTL: ");
+            return EXIT_FAILURE;
+        }
 
         if (shmdt(sharedMemory_ptr) == -1) {
             perror("shmdt");

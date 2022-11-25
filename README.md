@@ -21,13 +21,54 @@ cd buildDebug
 make
 cd ../bin/Debug/SharedMemory/
 
+ipcs --all
+# ------ Message Queues --------
+# key        msqid      owner      perms      used-bytes   messages    
+# 
+# ------ Shared Memory Segments --------
+# key        shmid      owner      perms      bytes      nattch     status      
+# 
+# ------ Semaphore Arrays --------
+# key        semid      owner      perms      nsems     
+# 
+
+
 ## start job 1 in backgroud
-./sm_server &
+./sm_server
+
+ipcs --all
+# ------ Message Queues --------
+# key        msqid      owner      perms      used-bytes   messages    
+
+# ------ Shared Memory Segments --------
+# key        shmid      owner      perms      bytes      nattch     status      
+# 0x00001234 3          ********   644        64         2                       
+
+# ------ Semaphore Arrays --------
+# key        semid      owner      perms      nsems     
+# 0x00054321 1          ********   666        1  
+
 ./sm_client
 
 ## Stop Job 1 ( sm_server )
 fg
 <CTRL+C>
+
+
+## clear all 
+ipcrm  --shmem-id 3
+ipcrm  --semaphore-id 1
+
+ipcs --all
+# ------ Message Queues --------
+# key        msqid      owner      perms      used-bytes   messages    
+
+# ------ Shared Memory Segments --------
+# key        shmid      owner      perms      bytes      nattch     status      
+
+# ------ Semaphore Arrays --------
+# key        semid      owner      perms      nsems     
+#
 
 ```
 
