@@ -5,7 +5,7 @@
 #include <rapidjson/document.h>
 #include <sys/shm.h>
 #include <sys/sem.h>
-#include<errno.h>
+#include <errno.h>
 
 #include "Tools/JSonUtils.h"
 #include "Tools/ProgramOptionsUtils.h"
@@ -17,6 +17,12 @@
 
 #define SHM_KEY 0x1234
 #define SEM_KEY 0x54321
+
+
+bool remove_all_semaphores(const key_t &semaphore_key);
+bool remove_all_sharedMemory(const key_t &sharedMemory_key);
+bool semaphore_lock(const int &semaphore_id);
+bool semaphore_unlock(const int &semaphore_id);
 
 
 int main(int argc, char const* argv[]) 
@@ -39,9 +45,12 @@ int main(int argc, char const* argv[])
             return EXIT_SUCCESS;
         }
 
+        remove_all_semaphores( SEM_KEY );
+        remove_all_sharedMemory( SEM_KEY );
 
-        // Book_Type bookTop;
-
+        // std::cout << "|> Limit on the total amount of shared memory: " << SHMALL << std::endl;
+        // std::cout << "|> Maximum size in bytes for a shared memory segment: " << SHMMAX  << std::endl;
+        
         const auto sharedMemory_id = shmget(SHM_KEY, sizeof(Book_Type), 0644|IPC_CREAT);
          if (sharedMemory_id == -1) {
             perror("Shared memory");
@@ -51,37 +60,15 @@ int main(int argc, char const* argv[])
         Book_Type* const sharedMemory_ptr = (Book_Type*) shmat(sharedMemory_id, NULL, 0);
         if (sharedMemory_ptr == (void *) -1) {
             perror("Shared memory attach");
+
+
             return EXIT_FAILURE;
         }
 
-
-        int semaphore_id{};
-
-        /** remove all semaphores */
-        while( ( semaphore_id = semget(SEM_KEY, 1, IPC_STAT) ) >= 0  ) {
-            semctl(semaphore_id, 1, IPC_RMID);
-        }
-
-        semaphore_id = semget(SEM_KEY, 1, IPC_CREAT | IPC_EXCL | 0666);
-        
-        struct sembuf semaphore_ops[2] { 
-            {
-            .sem_num = 0,       /* Operate on semaphore 0 */
-            .sem_op = 0,        /* Wait resource until value to equals zero */
-            .sem_flg = 0 }
-            , {
-            .sem_num = 0,       /* Operate on semaphore 0 */
-            .sem_op = 1,        /* Increment value by one  */
-            .sem_flg = SEM_UNDO }
-        };
-
-        struct sembuf  semaphore_ops_release{ .sem_num = 0, .sem_op = -1, .sem_flg = 0 };
+        int semaphore_id = semget(SEM_KEY, 1, IPC_CREAT | IPC_EXCL | 0666);
         
         BinanceExchange wsBinance( "BinanceExchange", [&](const std::string symbol_id, const BinanceExchange::ValueList_Type& map_bid, const  BinanceExchange::ValueList_Type& map_ask) {
-            if (semop(semaphore_id, semaphore_ops, 2) == -1) {
-                perror("Semaphore Operation: ");
-                return EXIT_FAILURE;
-            }
+            semaphore_lock( semaphore_id );
 
             strcpy(sharedMemory_ptr->symbol, symbol_id.c_str());
             sharedMemory_ptr->top_bid[0] = map_bid.begin()->first;
@@ -90,9 +77,7 @@ int main(int argc, char const* argv[])
             sharedMemory_ptr->top_ask[1] = map_ask.begin()->second;
             sharedMemory_ptr->sequence++;
 
-            /* unlock semaphore */
-            semop(semaphore_id, &semaphore_ops_release, 1);
-
+            semaphore_unlock( semaphore_id );
         } );
 
         wsBinance.setConfig( md_config );
@@ -126,3 +111,68 @@ int main(int argc, char const* argv[])
 
     return EXIT_SUCCESS;
 }
+
+
+
+bool remove_all_semaphores(const key_t& semaphore_key ) {
+    int semaphore_id{};
+
+    while( ( semaphore_id = semget(semaphore_key, 0, IPC_STAT) ) >= 0  ) {
+        std::cout << "|> remove semaphore - id = " << semaphore_id << std::endl;
+        const int retval = semctl(semaphore_id, 1, IPC_RMID);
+       
+        if (retval == -1) {
+            perror("Remove Semaphore: Semaphore CTL: ");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool remove_all_sharedMemory(const key_t& sharedMemory_key ) {
+    int shm_id{};
+    struct shmid_ds info;
+
+    while (( shm_id = shmctl(0, SHM_INFO, &info) ) > 0 ) {
+        std::cout << "|> remove shared memory - id = " << shm_id   << std::endl;
+        const int retval = shmctl(shm_id, IPC_RMID, 0);
+       
+        if (retval == -1) {
+            perror("Remove SharedMemory: SharedMemory CTL: ");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool semaphore_lock( const int& semaphore_id) {
+    struct sembuf semaphore_ops[2] { 
+            {
+            .sem_num = 0,       /* Operate on semaphore 0 */
+            .sem_op = 0,        /* Wait resource until value to equals zero */
+            .sem_flg = 0 }
+            , {
+            .sem_num = 0,       /* Operate on semaphore 0 */
+            .sem_op = 1,        /* Increment value by one  */
+            .sem_flg = SEM_UNDO }
+        };
+
+    if (semop(semaphore_id, semaphore_ops, 2) == -1) {
+        perror("Semaphore Operation: ");
+        return false;
+    }
+
+    return true;
+}
+
+bool semaphore_unlock( const int& semaphore_id) {
+    struct sembuf  semaphore_ops_release{ .sem_num = 0, .sem_op = -1, .sem_flg = 0 };
+
+    /* unlock semaphore */
+    if (semop(semaphore_id, &semaphore_ops_release, 1) == -1) {
+        perror("Semaphore Operation: ");
+        return false;
+    }
+    return true;
+}
+
